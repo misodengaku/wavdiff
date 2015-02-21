@@ -29,7 +29,7 @@ namespace wavdiff
 
 		static void Main(string[] args)
 		{
-			var options = new HashSet<string> { "-in1", "-in2", "-threshold", "-o", "-fuck" };
+			var options = new HashSet<string> { "-in1", "-in2", "-threshold", "-o", "-fuck", "-reverse" };
 			string key = null;
 			int threshold;
 			var cmdargs = args
@@ -45,6 +45,7 @@ namespace wavdiff
 				Console.WriteLine("\t-o: output file path");
 				Console.WriteLine("\t-threshold: peak detect level (optional, default: 20000, 0~32767)");
 				Console.WriteLine("\t-fuck: enable autofuck mode (optional)");
+				Console.WriteLine("\t-reverse: enable reverse search mode (optional)");
 				return;
 			}
 			if (!cmdargs.ContainsKey("-threshold"))
@@ -77,6 +78,14 @@ namespace wavdiff
 				Console.WriteLine("autofuck mode enabled..");
 			}
 
+
+			if (cmdargs.ContainsKey("-reverse"))
+			{
+				Console.WriteLine("Reverse search mode enable.");
+				file0Data.Reverse();
+				file1Data.Reverse();
+			}
+
 			for (var i = 0; i < file0Data.Count; i++)
 			{
 				if (!file0Flag && file0Data[i] != 0)
@@ -103,8 +112,23 @@ namespace wavdiff
 					break;
 				}
 			}
+			if (cmdargs.ContainsKey("-reverse"))
+			{
+				file0Data.Reverse();
+				file1Data.Reverse();
+			}
 
-			var diff = file0Count - file1Count;
+			int diff;
+
+			if (cmdargs.ContainsKey("-reverse"))
+			{
+				diff = (file0Data.Count - file0Count) - (file1Data.Count - file1Count);
+			}
+			else
+			{
+				diff = file0Count - file1Count;
+			}
+
 			List<Int16> lNewDataList, rNewDataList;
 			if (diff < 0)
 			{
