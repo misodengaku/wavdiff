@@ -32,9 +32,26 @@ namespace wavdiff
 			var options = new HashSet<string> { "-in1", "-in2", "-threshold", "-o", "-fuck", "-reverse" };
 			string key = null;
 			int threshold;
+			var Header = new WavHeader();
+			Tuple<List<short>, List<short>, WavHeader> file0 = null, file1 = null;
+
 			var cmdargs = args
 				.GroupBy(s => options.Contains(s) ? key = s : key)
 				.ToDictionary(g => g.Key, g => g.Skip(1).FirstOrDefault());
+			Parallel.Invoke(() => { file0 = OpenWavfile(cmdargs["-in1"]); }, () => { file1 = OpenWavfile(cmdargs["-in2"]); });
+
+			var file0Data = file0.Item2;
+			var file1Data = file1.Item2;
+			var file0Head = 0;
+			var file1Head = 0;
+			var file0Count = 0;
+			var file1Count = 0;
+			var file0Flag = false;
+			var file1Flag = false;
+			int diff;
+			List<Int16> lNewDataList = null, rNewDataList = null;
+
+
 
 			if (!cmdargs.ContainsKey("-in1") && !cmdargs.ContainsKey("-in2") && !cmdargs.ContainsKey("-o"))
 			{
@@ -57,21 +74,6 @@ namespace wavdiff
 				threshold = int.Parse(cmdargs["-threshold"]);
 			}
 
-			var Header = new WavHeader();
-
-			var file0 = OpenWavfile(cmdargs["-in1"]);
-			var file1 = OpenWavfile(cmdargs["-in2"]);
-
-			//ここで加工（とりあえず素通り）
-
-			var file0Data = file0.Item2;
-			var file1Data = file1.Item2;
-			var file0Head = 0;
-			var file1Head = 0;
-			var file0Count = 0;
-			var file1Count = 0;
-			var file0Flag = false;
-			var file1Flag = false;
 
 			if (cmdargs.ContainsKey("-fuck"))
 			{
@@ -85,40 +87,44 @@ namespace wavdiff
 				file0Data.Reverse();
 				file1Data.Reverse();
 			}
-
-			for (var i = 0; i < file0Data.Count; i++)
+			Parallel.Invoke(() =>
 			{
-				if (!file0Flag && file0Data[i] != 0)
+				for (var i = 0; i < file0Data.Count; i++)
 				{
-					file0Head = i;
-					file0Flag = true;
+					if (!file0Flag && file0Data[i] != 0)
+					{
+						file0Head = i;
+						file0Flag = true;
+					}
+					if (Math.Abs(file0Data[i]) > threshold)
+					{
+						file0Count = i;
+						break;
+					}
 				}
-				if (Math.Abs(file0Data[i]) > threshold)
-				{
-					file0Count = i;
-					break;
-				}
-			}
-			for (var i = 0; i < file1Data.Count; i++)
+			}, () =>
 			{
-				if (!file1Flag && file1Data[i] != 0)
+				for (var i = 0; i < file1Data.Count; i++)
 				{
-					file1Head = i;
-					file1Flag = true;
+					if (!file1Flag && file1Data[i] != 0)
+					{
+						file1Head = i;
+						file1Flag = true;
+					}
+					if (Math.Abs(file1Data[i]) > threshold)
+					{
+						file1Count = i;
+						break;
+					}
 				}
-				if (Math.Abs(file1Data[i]) > threshold)
-				{
-					file1Count = i;
-					break;
-				}
-			}
+			});
+			
+			
 			if (cmdargs.ContainsKey("-reverse"))
 			{
-				file0Data.Reverse();
-				file1Data.Reverse();
+				Parallel.Invoke(() => file0Data.Reverse(), () => file1Data.Reverse());
 			}
 
-			int diff;
 
 			if (cmdargs.ContainsKey("-reverse"))
 			{
@@ -129,36 +135,45 @@ namespace wavdiff
 				diff = file0Count - file1Count;
 			}
 
-			List<Int16> lNewDataList, rNewDataList;
 			if (diff < 0)
 			{
 				diff = diff*-1;
 				Console.WriteLine("Diff: " + diff);
 				Console.WriteLine("File: " + cmdargs["-in2"]);
-
-				lNewDataList = file1.Item1.Skip(diff).Select(x =>
+				Parallel.Invoke(() =>
 				{
-					if (x != -32768)
-						return (short)(x * -1);
-					else
-						return short.MaxValue;
-				}).ToList<short>();
-				rNewDataList = file1.Item2.Skip(diff).Select(x =>
+					lNewDataList = file1.Item1.Skip(diff).Select(x =>
+					{
+						if (x != -32768)
+							return (short) (x*-1);
+						else
+							return short.MaxValue;
+					}).ToList<short>();
+				}, () =>
 				{
-					if (x != -32768)
-						return (short)(x * -1);
-					else
-						return short.MaxValue;
-				}).ToList<short>();
-				Header = file1.Item3;
+					rNewDataList = file1.Item2.Skip(diff).Select(x =>
+					{
+						if (x != -32768)
+							return (short) (x*-1);
+						else
+							return short.MaxValue;
+					}).ToList<short>();
+				}, () =>
+				{
+					Header = file1.Item3;
+				});
+				
+				
 
 
 				if (cmdargs.ContainsKey("-fuck"))
 				{
 					Console.WriteLine("Autofucking...");
 					// newdata + file0
-					lNewDataList = lNewDataList.Zip(file0.Item1, (s, s1) => (short)(s + s1)).ToList();
-					rNewDataList = rNewDataList.Zip(file0.Item2, (s, s1) => (short)(s + s1)).ToList();
+					Parallel.Invoke(() => { lNewDataList = lNewDataList.Zip(file0.Item1, (s, s1) => (short)(s + s1)).ToList(); },
+						() => { rNewDataList = rNewDataList.Zip(file0.Item2, (s, s1) => (short)(s + s1)).ToList(); });
+					
+					
 				}
 			}
 			else
@@ -167,29 +182,40 @@ namespace wavdiff
 				Console.WriteLine("Diff: " + diff);
 				Console.WriteLine("File: " + cmdargs["-in1"]);
 
-				lNewDataList = file0.Item1.Skip(diff).Select(x =>
+				Parallel.Invoke(() =>
 				{
-					if (x != -32768)
-						return (short)(x * -1);
-					else
-						return short.MaxValue;
-				}).ToList<short>();
-				rNewDataList = file0.Item2.Skip(diff).Select(x =>
+					lNewDataList = file0.Item1.Skip(diff).Select(x =>
+					{
+						if (x != -32768)
+							return (short) (x*-1);
+						else
+							return short.MaxValue;
+					}).ToList<short>();
+				}, () =>
 				{
-					if (x != -32768)
-						return (short)(x * -1);
-					else
-						return short.MaxValue;
-				}).ToList<short>();
-				Header = file0.Item3;
+					rNewDataList = file0.Item2.Skip(diff).Select(x =>
+					{
+						if (x != -32768)
+							return (short) (x*-1);
+						else
+							return short.MaxValue;
+					}).ToList<short>();
+				}, () =>
+				{
+					Header = file0.Item3;
+				});
+				
+				
 
 
 				if (cmdargs.ContainsKey("-fuck"))
 				{
 					Console.WriteLine("Autofucking...");
 					// newdata + file1
-					lNewDataList = lNewDataList.Zip(file1.Item1, (s, s1) => (short)(s + s1)).ToList();
-					rNewDataList = rNewDataList.Zip(file1.Item2, (s, s1) => (short)(s + s1)).ToList();
+					Parallel.Invoke(() => { lNewDataList = lNewDataList.Zip(file1.Item1, (s, s1) => (short) (s + s1)).ToList(); },
+						() => { rNewDataList = rNewDataList.Zip(file1.Item2, (s, s1) => (short) (s + s1)).ToList(); });
+
+
 				}
 			}
 
