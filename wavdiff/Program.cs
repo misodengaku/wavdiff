@@ -25,6 +25,7 @@ namespace wavdiff
 			public ushort bit;  // 量子化ビット数
 			public byte[] dataID; // "data"
 			public uint dataSize; // 波形データのバイト数
+			public List<byte> extendedArea;
 		}
 
 		static void Main(string[] args)
@@ -212,8 +213,18 @@ namespace wavdiff
 				{
 					Console.WriteLine("Autofucking...");
 					// newdata + file1
-					Parallel.Invoke(() => { lNewDataList = lNewDataList.Zip(file1.Item1, (s, s1) => (short) (s + s1)).ToList(); },
-						() => { rNewDataList = rNewDataList.Zip(file1.Item2, (s, s1) => (short) (s + s1)).ToList(); });
+					// メモリが足りなくなる
+					if (Header.sampleRate < 48001)
+					{
+
+						Parallel.Invoke(() => { lNewDataList = lNewDataList.Zip(file1.Item1, (s, s1) => (short) (s + s1)).ToList(); },
+							() => { rNewDataList = rNewDataList.Zip(file1.Item2, (s, s1) => (short) (s + s1)).ToList(); });
+					}
+					else
+					{
+						lNewDataList = lNewDataList.Zip(file1.Item1, (s, s1) => (short)(s + s1)).ToList();
+						rNewDataList = rNewDataList.Zip(file1.Item2, (s, s1) => (short)(s + s1)).ToList();
+					}
 
 
 				}
@@ -240,7 +251,16 @@ namespace wavdiff
 					bw.Write(Header.bytePerSec);
 					bw.Write(Header.blockSize);
 					bw.Write(Header.bit);
-					bw.Write(Header.dataID);
+
+					if (Header.format != 1)
+					{
+						bw.Write(Header.extendedArea.ToArray());
+					}
+					else
+					{
+						bw.Write(Header.dataID);
+					}
+					
 					bw.Write(Header.dataSize);
 
 					for (var i = 0; i < Header.dataSize / Header.blockSize; i++)
@@ -298,7 +318,43 @@ namespace wavdiff
 					Header.bytePerSec = br.ReadUInt32();
 					Header.blockSize = br.ReadUInt16();
 					Header.bit = br.ReadUInt16();
-					Header.dataID = br.ReadBytes(4);
+					if (Header.format != 1)
+					{
+						Header.extendedArea = new List<byte>();
+						var extendSize = br.ReadInt16();
+						Header.extendedArea.Add((byte)(extendSize & 0xFF00 >> 16));
+						Header.extendedArea.Add((byte)(extendSize & 0xFF));
+						Header.extendedArea.AddRange(br.ReadBytes(extendSize)); // extended area + "data"
+						while (true)
+						{
+							var d = br.ReadByte();
+							Header.extendedArea.Add(d);
+							if (d == 'd')
+							{
+								d = br.ReadByte();
+								Header.extendedArea.Add(d);
+								if (d == 'a')
+								{
+									d = br.ReadByte();
+									Header.extendedArea.Add(d);
+									if (d == 't')
+									{
+
+										d = br.ReadByte();
+										Header.extendedArea.Add(d);
+										if (d == 'a')
+										{
+											break;
+										}
+									}
+								}
+							}
+						}
+					}
+					else
+					{
+						Header.dataID = br.ReadBytes(4);
+					}
 					Header.dataSize = br.ReadUInt32();
 
 					for (var i = 0; i < Header.dataSize / Header.blockSize; i++)
