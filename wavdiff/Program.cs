@@ -26,6 +26,7 @@ namespace wavdiff
 			public byte[] dataID; // "data"
 			public uint dataSize; // 波形データのバイト数
 			public List<byte> extendedArea;
+			public List<byte> unknownHeader;
 		}
 
 		static void Main(string[] args)
@@ -163,6 +164,8 @@ namespace wavdiff
 				{
 					Header = file1.Item3;
 				});
+
+				GetTAF(lNewDataList, rNewDataList);
 				
 				
 
@@ -205,8 +208,9 @@ namespace wavdiff
 				{
 					Header = file0.Item3;
 				});
-				
-				
+
+
+				GetTAF(lNewDataList, rNewDataList);
 
 
 				if (cmdargs.ContainsKey("-fuck"))
@@ -260,7 +264,7 @@ namespace wavdiff
 					{
 						bw.Write(Header.dataID);
 					}
-					
+					bw.Write(Header.unknownHeader.ToArray());
 					bw.Write(Header.dataSize);
 
 					for (var i = 0; i < Header.dataSize / Header.blockSize; i++)
@@ -298,7 +302,7 @@ namespace wavdiff
 
 		private static Tuple<List<short>, List<short>, WavHeader> OpenWavfile(string s)
 		{
-
+			Console.WriteLine("File Open: " + s);
 			var Header = new WavHeader();
 			var lDataList = new List<short>();
 			var rDataList = new List<short>();
@@ -315,9 +319,11 @@ namespace wavdiff
 					Header.format = br.ReadUInt16();
 					Header.channels = br.ReadUInt16();
 					Header.sampleRate = br.ReadUInt32();
+					Console.WriteLine("Sample Rate: " + Header.sampleRate + "Hz");
 					Header.bytePerSec = br.ReadUInt32();
 					Header.blockSize = br.ReadUInt16();
 					Header.bit = br.ReadUInt16();
+					Header.unknownHeader = new List<byte>();
 					if (Header.format != 1)
 					{
 						Header.extendedArea = new List<byte>();
@@ -328,20 +334,20 @@ namespace wavdiff
 						while (true)
 						{
 							var d = br.ReadByte();
-							Header.extendedArea.Add(d);
+							Header.unknownHeader.Add(d);
 							if (d == 'd')
 							{
 								d = br.ReadByte();
-								Header.extendedArea.Add(d);
+								Header.unknownHeader.Add(d);
 								if (d == 'a')
 								{
 									d = br.ReadByte();
-									Header.extendedArea.Add(d);
+									Header.unknownHeader.Add(d);
 									if (d == 't')
 									{
 
 										d = br.ReadByte();
-										Header.extendedArea.Add(d);
+										Header.unknownHeader.Add(d);
 										if (d == 'a')
 										{
 											break;
@@ -354,6 +360,33 @@ namespace wavdiff
 					else
 					{
 						Header.dataID = br.ReadBytes(4);
+						var data_str = System.Text.Encoding.GetEncoding(932).GetString(Header.dataID);
+						if (data_str != "data")
+							while (true)
+							{
+								var d = br.ReadByte();
+								Header.unknownHeader.Add(d);
+								if (d == 'd')
+								{
+									d = br.ReadByte();
+									Header.unknownHeader.Add(d);
+									if (d == 'a')
+									{
+										d = br.ReadByte();
+										Header.unknownHeader.Add(d);
+										if (d == 't')
+										{
+
+											d = br.ReadByte();
+											Header.unknownHeader.Add(d);
+											if (d == 'a')
+											{
+												break;
+											}
+										}
+									}
+								}
+							}
 					}
 					Header.dataSize = br.ReadUInt32();
 
@@ -373,6 +406,33 @@ namespace wavdiff
 
 
 			return Tuple.Create(lDataList, rDataList, Header);
+		}
+
+		// TAF(Track Antiphase Fuckability)
+		private static double GetTAF(List<short> l, List<short> r)
+		{
+
+			// TAF(Track Antiphase Fuckability)
+			var lzc = l.Count(x => x == 0);
+			var rzc = r.Count(x => x == 0);
+			var lp = l.Select(x => Math.Abs((double)x)).Sum();
+			var rp = r.Select(x => Math.Abs((double)x)).Sum();
+			var p = (lp + rp)/2 / l.Count;
+
+
+			if (lzc + rzc == 0)
+			{
+				Console.WriteLine("TAF=0.00000");
+				return 0.0;
+			}
+			else
+			{
+				Console.WriteLine("power = " + p);
+				var taf = p * (double) (lzc + rzc)/2/l.Count;
+				Console.WriteLine("TAF=" + taf.ToString("n5"));
+				return taf;
+			}
+
 		}
 	}
 }
