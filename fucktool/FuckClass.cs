@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -11,7 +13,7 @@ namespace fucktool
 	{
 
 		// http://blog.yomak.info/2011/11/wavecnet.html
-		struct WavHeader
+		public struct WavHeader
 		{
 			public byte[] riffID; // "riff"
 			public uint size;  // ファイルサイズ-8
@@ -28,262 +30,317 @@ namespace fucktool
 			public uint dataSize; // 波形データのバイト数
 		}
 
-		public static void Fuck(List<string> files, string outputpath, bool reverse, int threshold)
+		public class WavFile
+		{
+			private WavHeader _header;
+
+			public WavHeader Header
+			{
+				get { return _header; }
+				set { _header = value; }
+			}
+
+			public List<short> LeftChannel { get; set; }
+
+			public List<short> RightChannel { get; set; }
+
+			public int Count
+			{
+				get { return LeftChannel.Count; }
+			}
+
+			public int CueIndex { get; private set; }
+
+			public WavFile()
+			{
+				CueIndex = -1;
+				Header = new WavHeader();
+				LeftChannel = new List<short>();
+				RightChannel = new List<short>();
+			}
+
+			public void OpenWavfile(string s)
+			{
+				Header = new WavHeader();
+				using (var fs = new FileStream(s, FileMode.Open, FileAccess.Read))
+				using (var br = new BinaryReader(fs))
+				{
+					try
+					{
+						_header.riffID = br.ReadBytes(4);
+						_header.size = br.ReadUInt32();
+						_header.wavID = br.ReadBytes(4);
+						_header.fmtID = br.ReadBytes(4);
+						_header.fmtSize = br.ReadUInt32();
+						_header.format = br.ReadUInt16();
+						_header.channels = br.ReadUInt16();
+						_header.sampleRate = br.ReadUInt32();
+						_header.bytePerSec = br.ReadUInt32();
+						_header.blockSize = br.ReadUInt16();
+						_header.bit = br.ReadUInt16();
+						_header.dataID = br.ReadBytes(4);
+						_header.dataSize = br.ReadUInt32();
+
+						for (var i = 0; i < Header.dataSize / Header.blockSize; i++)
+						{
+							LeftChannel.Add((short)br.ReadUInt16());
+							RightChannel.Add((short)br.ReadUInt16());
+						}
+					}
+					finally
+					{
+						br.Close();
+						fs.Close();
+					}
+				}
+			}
+
+			public void SaveWavfile(string outputpath)
+			{
+				_header.dataSize = (uint)Math.Max(LeftChannel.Count, RightChannel.Count) * 4;
+
+				using (var fs = new FileStream(outputpath, FileMode.Create, FileAccess.Write))
+				using (var bw = new BinaryWriter(fs))
+				{
+					try
+					{
+						bw.Write(Header.riffID);
+						bw.Write(Header.size);
+						bw.Write(Header.wavID);
+						bw.Write(Header.fmtID);
+						bw.Write(Header.fmtSize);
+						bw.Write(Header.format);
+						bw.Write(Header.channels);
+						bw.Write(Header.sampleRate);
+						bw.Write(Header.bytePerSec);
+						bw.Write(Header.blockSize);
+						bw.Write(Header.bit);
+						bw.Write(Header.dataID);
+						bw.Write(Header.dataSize);
+
+						for (var i = 0; i < Header.dataSize / Header.blockSize; i++)
+						{
+							if (i < LeftChannel.Count)
+							{
+								bw.Write((ushort)LeftChannel[i]);
+							}
+							else
+							{
+								bw.Write(0);
+							}
+
+							if (i < RightChannel.Count)
+							{
+								bw.Write((ushort)RightChannel[i]);
+							}
+							else
+							{
+								bw.Write(0);
+							}
+						}
+					}
+					finally
+					{
+						bw.Close();
+						fs.Close();
+					}
+				}
+			}
+
+			public int Cue(int threshold, bool reverse = false)
+			{
+				if (reverse)
+				{
+					CueIndex = LeftChannel
+						.Select((x, i) => new {Value = (int)x, Index = i })
+						.Last(item => Math.Abs(item.Value) > threshold)
+						.Index;
+				}
+				else
+				{
+					CueIndex = LeftChannel
+						.Select((x, i) => new { Value = (int)x, Index = i })
+						.First(item => Math.Abs(item.Value) > threshold)
+						.Index;
+				}
+				return CueIndex;
+			}
+
+			/// <summary>
+			/// このオブジェクトを基準として、他のWavFileオブジェクトとのCueIndexの差を求めます。
+			/// </summary>
+			/// <param name="file1"></param>
+			/// <param name="reverse"></param>
+			/// <returns></returns>
+			public int GetDiff(WavFile file1, bool reverse = false)
+			{
+				int diff;
+				if (reverse)
+				{
+					diff = (Count - CueIndex) - (file1.Count - file1.CueIndex);
+				}
+				else
+				{
+					diff = CueIndex - file1.CueIndex;
+				}
+				return diff;
+			}
+
+			public void Merge(WavFile file1, int diff)
+			{
+				var newWavFile = new WavFile();
+				WavFile mergeWavFile;
+
+				if (diff < 0)
+				{
+					diff = diff * -1;
+
+					Parallel.Invoke(() =>
+					{
+						newWavFile.LeftChannel = file1.LeftChannel.Skip(diff).Select(x =>
+						{
+							if (x != -32768)
+								return (short)(x * -1);
+							else
+								return short.MaxValue;
+						}).ToList<short>();
+					}, () =>
+					{
+						newWavFile.RightChannel = file1.RightChannel.Skip(diff).Select(x =>
+						{
+							if (x != -32768)
+								return (short)(x * -1);
+							else
+								return short.MaxValue;
+						}).ToList<short>();
+					});
+
+					mergeWavFile = this;
+				}
+				else
+				{
+					Parallel.Invoke(() =>
+					{
+						
+						newWavFile.LeftChannel = LeftChannel.Skip(diff).Select(x =>
+						{
+							if (x != -32768)
+								return (short)(x * -1);
+							else
+								return short.MaxValue;
+						}).ToList<short>();
+					}, () =>
+					{
+						
+						newWavFile.RightChannel = RightChannel.Skip(diff).Select(x =>
+						{
+							if (x != -32768)
+								return (short)(x * -1);
+							else
+								return short.MaxValue;
+						}).ToList<short>();
+					});
+
+					mergeWavFile = file1;
+				}
+				
+				Parallel.Invoke(() =>
+				{
+					LeftChannel = newWavFile.LeftChannel.Zip(mergeWavFile.LeftChannel, (s, s1) => (short)(s + s1)).ToList();
+				},
+				() =>
+				{
+					RightChannel = newWavFile.RightChannel.Zip(mergeWavFile.RightChannel, (s, s1) => (short)(s + s1)).ToList();
+				});
+			}
+		}
+
+		public static async Task<double> Fuck(List<string> files, string outputpath, bool reverse, int threshold, IProgress<string> progress)
 		{
 			if (files.Count != 2)
 				throw new ArgumentOutOfRangeException("filesの長さは2である必要性があります");
-			
 
-			string key = null;
-			var Header = new WavHeader();
-			Tuple<List<short>, List<short>, WavHeader> file0 = null, file1 = null;
-
-			Parallel.Invoke(() => { file0 = OpenWavfile(files[0]); }, () => { file1 = OpenWavfile(files[1]); });
-
-			var file0Data = file0.Item2;
-			var file1Data = file1.Item2;
-			var file0Head = 0;
-			var file1Head = 0;
-			var file0Count = 0;
-			var file1Count = 0;
-			var file0Flag = false;
-			var file1Flag = false;
-			int diff;
-			List<Int16> lNewDataList = null, rNewDataList = null;
-
-
-			if (reverse)
+			await Task.Run(() =>
 			{
-				Console.WriteLine("Reverse search mode enable.");
-				file0Data.Reverse();
-				file1Data.Reverse();
-			}
-			Parallel.Invoke(() =>
-			{
-				for (var i = 0; i < file0Data.Count; i++)
+
+				string key = null;
+				var Header = new WavHeader();
+				WavFile file0 = new WavFile(), file1 = new WavFile();
+
+				Parallel.Invoke(() =>
 				{
-					if (!file0Flag && file0Data[i] != 0)
-					{
-						file0Head = i;
-						file0Flag = true;
-					}
-					if (Math.Abs(file0Data[i]) > threshold)
-					{
-						file0Count = i;
-						break;
-					}
-				}
-			}, () =>
-			{
-				for (var i = 0; i < file1Data.Count; i++)
+					file0.OpenWavfile(files[0]);
+					progress.Report("open: "+ files[0]);
+					file0.Cue(threshold, reverse);
+					progress.Report("先頭発見");
+				}, () =>
 				{
-					if (!file1Flag && file1Data[i] != 0)
-					{
-						file1Head = i;
-						file1Flag = true;
-					}
-					if (Math.Abs(file1Data[i]) > threshold)
-					{
-						file1Count = i;
-						break;
-					}
+					file1.OpenWavfile(files[1]);
+					progress.Report("open: " + files[1]);
+					file1.Cue(threshold, reverse);
+					progress.Report("先頭発見");
+				});
+
+				// FIXME: reverse時バグる気がする
+				var diff = file0.GetDiff(file1, reverse);
+				file0.Merge(file1, diff);
+				progress.Report("保存中");
+				file0.SaveWavfile(outputpath);
+				progress.Report("saved: " + outputpath);
+
+				/*
+				if (file0.Count < file1.Count)
+				{
+					var diff = file1.GetDiff(file0, reverse);
+					progress.Report("diff");
+					file0.Merge(file1, diff);
+					//file1.Merge(file0, diff);
+					progress.Report("merged");
+					file0.SaveWavfile(outputpath);
+					progress.Report("saved: " + outputpath);
 				}
+				else
+				{
+					var diff = file0.GetDiff(file1, reverse);
+					progress.Report("diff");
+					file1.Merge(file0, diff);
+					progress.Report("merged");
+					file1.SaveWavfile(outputpath);
+					progress.Report("saved: " + outputpath);
+				}
+				*/
 			});
+			return 0.0;
+		}
 
 
-			if (reverse)
+
+		// TAF(Track Antiphase Fuckability)
+		private static double GetTAF(List<short> l, List<short> r)
+		{
+
+			// TAF(Track Antiphase Fuckability)
+			var lzc = l.Count(x => x == 0);
+			var rzc = r.Count(x => x == 0);
+			var lp = l.Select(x => Math.Abs((double)x)).Sum();
+			var rp = r.Select(x => Math.Abs((double)x)).Sum();
+			var p = (lp + rp) / 2 / l.Count;
+
+
+			if (lzc + rzc == 0)
 			{
-				Parallel.Invoke(() => file0Data.Reverse(), () => file1Data.Reverse());
-				diff = (file0Data.Count - file0Count) - (file1Data.Count - file1Count);
+				Console.WriteLine("TAF=0.00000");
+				return 0.0;
 			}
 			else
 			{
-				diff = file0Count - file1Count;
+				Console.WriteLine("power = " + p);
+				var taf = p * (double)(lzc + rzc) / 2 / l.Count;
+				Console.WriteLine("TAF=" + taf.ToString("n5"));
+				return taf;
 			}
 
-			if (diff < 0)
-			{
-				diff = diff * -1;
-				Console.WriteLine("Diff: " + diff);
-				Console.WriteLine("File: " + files[1]);
-				Parallel.Invoke(() =>
-				{
-					lNewDataList = file1.Item1.Skip(diff).Select(x =>
-					{
-						if (x != -32768)
-							return (short)(x * -1);
-						else
-							return short.MaxValue;
-					}).ToList<short>();
-				}, () =>
-				{
-					rNewDataList = file1.Item2.Skip(diff).Select(x =>
-					{
-						if (x != -32768)
-							return (short)(x * -1);
-						else
-							return short.MaxValue;
-					}).ToList<short>();
-				}, () =>
-				{
-					Header = file1.Item3;
-				});
-
-
-
-				// autofuck
-				Console.WriteLine("Autofucking...");
-				// newdata + file0
-				Parallel.Invoke(() => { lNewDataList = lNewDataList.Zip(file0.Item1, (s, s1) => (short)(s + s1)).ToList(); },
-					() => { rNewDataList = rNewDataList.Zip(file0.Item2, (s, s1) => (short)(s + s1)).ToList(); });
-
-			}
-			else
-			{
-
-				Console.WriteLine("Diff: " + diff);
-				Console.WriteLine("File: " + files[0]);
-
-				Parallel.Invoke(() =>
-				{
-					lNewDataList = file0.Item1.Skip(diff).Select(x =>
-					{
-						if (x != -32768)
-							return (short)(x * -1);
-						else
-							return short.MaxValue;
-					}).ToList<short>();
-				}, () =>
-				{
-					rNewDataList = file0.Item2.Skip(diff).Select(x =>
-					{
-						if (x != -32768)
-							return (short)(x * -1);
-						else
-							return short.MaxValue;
-					}).ToList<short>();
-				}, () =>
-				{
-					Header = file0.Item3;
-				});
-
-
-
-
-				// autofuck
-				Console.WriteLine("Autofucking...");
-				// newdata + file1
-				Parallel.Invoke(() => { lNewDataList = lNewDataList.Zip(file1.Item1, (s, s1) => (short)(s + s1)).ToList(); },
-					() => { rNewDataList = rNewDataList.Zip(file1.Item2, (s, s1) => (short)(s + s1)).ToList(); });
-
-
-				
-			}
-
-
-
-
-			Header.dataSize = (uint)Math.Max(lNewDataList.Count, rNewDataList.Count) * 4;
-
-			using (var fs = new FileStream(outputpath, FileMode.Create, FileAccess.Write))
-			using (var bw = new BinaryWriter(fs))
-			{
-				try
-				{
-					bw.Write(Header.riffID);
-					bw.Write(Header.size);
-					bw.Write(Header.wavID);
-					bw.Write(Header.fmtID);
-					bw.Write(Header.fmtSize);
-					bw.Write(Header.format);
-					bw.Write(Header.channels);
-					bw.Write(Header.sampleRate);
-					bw.Write(Header.bytePerSec);
-					bw.Write(Header.blockSize);
-					bw.Write(Header.bit);
-					bw.Write(Header.dataID);
-					bw.Write(Header.dataSize);
-
-					for (var i = 0; i < Header.dataSize / Header.blockSize; i++)
-					{
-						if (i < lNewDataList.Count)
-						{
-							bw.Write((ushort)lNewDataList[i]);
-						}
-						else
-						{
-							bw.Write(0);
-						}
-
-						if (i < rNewDataList.Count)
-						{
-							bw.Write((ushort)rNewDataList[i]);
-						}
-						else
-						{
-							bw.Write(0);
-						}
-					}
-				}
-				finally
-				{
-					bw.Close();
-					fs.Close();
-				}
-			}
-
-
-			Console.WriteLine("output: " + outputpath);
-			return;
 		}
 
-		public static async Task FuckAsync(Action<string> x, List<string> files, string outputpath, bool reverse, int threshold)
-		{
-			await Task.Run(new Action(() => Fuck(files, outputpath, reverse, threshold)));
-			x(outputpath);
-		}
-
-		private static Tuple<List<short>, List<short>, WavHeader> OpenWavfile(string s)
-		{
-
-			var Header = new WavHeader();
-			var lDataList = new List<short>();
-			var rDataList = new List<short>();
-			using (var fs = new FileStream(s, FileMode.Open, FileAccess.Read))
-			using (var br = new BinaryReader(fs))
-			{
-				try
-				{
-					Header.riffID = br.ReadBytes(4);
-					Header.size = br.ReadUInt32();
-					Header.wavID = br.ReadBytes(4);
-					Header.fmtID = br.ReadBytes(4);
-					Header.fmtSize = br.ReadUInt32();
-					Header.format = br.ReadUInt16();
-					Header.channels = br.ReadUInt16();
-					Header.sampleRate = br.ReadUInt32();
-					Header.bytePerSec = br.ReadUInt32();
-					Header.blockSize = br.ReadUInt16();
-					Header.bit = br.ReadUInt16();
-					Header.dataID = br.ReadBytes(4);
-					Header.dataSize = br.ReadUInt32();
-
-					for (var i = 0; i < Header.dataSize / Header.blockSize; i++)
-					{
-						lDataList.Add((short)br.ReadUInt16());
-						rDataList.Add((short)br.ReadUInt16());
-					}
-				}
-				finally
-				{
-					br.Close();
-					fs.Close();
-				}
-			}
-			Console.WriteLine(s);
-
-
-			return Tuple.Create(lDataList, rDataList, Header);
-		}
 	}
 }

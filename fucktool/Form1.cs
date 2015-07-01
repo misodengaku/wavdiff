@@ -64,17 +64,20 @@ namespace fucktool
 			var filename = @"Y:\EAC\その他\ラブライブ！\μ's - Music S.T.A.R.T!!\ok\そして最後のページにはfuck.wav";
 
 			statusLabel.Text = "処理中...";
-			await FuckClass.FuckAsync(x =>
+			var progress = new Progress<string>(s =>
 			{
-				if (MessageBox.Show("処理が完了しました\nファイルを参照しますか？", "完了", MessageBoxButtons.YesNo) == DialogResult.Yes)
-				{
-					var p = new System.Diagnostics.Process();
-					p.StartInfo.FileName = "explorer.exe";
-					p.StartInfo.Arguments = "/select,\"" + x;
-					p.Start();
-				}
-			}, fileList.Items.Cast<string>().ToList(), textBox1.Text, checkBox1.Checked, trackBar1.Value);
+				statusLabel.Text = s;
+			});
+			await FuckClass.Fuck(fileList.Items.Cast<string>().ToList(), textBox1.Text, checkBox1.Checked, trackBar1.Value, progress);
 
+			if (MessageBox.Show("処理が完了しました\nファイルを参照しますか？", "完了", MessageBoxButtons.YesNo) == DialogResult.Yes)
+			{
+				var p = new System.Diagnostics.Process();
+				p.StartInfo.FileName = "explorer.exe";
+				p.StartInfo.Arguments = "/select,\"" + textBox1.Text;
+				p.Start();
+			}
+			
 			statusLabel.Text = "OK";
 		}
 	}
