@@ -99,50 +99,69 @@ namespace fucktool
 			{
 				_header.dataSize = (uint)Math.Max(LeftChannel.Count, RightChannel.Count) * 4;
 
-				using (var fs = new FileStream(outputpath, FileMode.Create, FileAccess.Write))
-				using (var bw = new BinaryWriter(fs))
+				//using (var fs = new FileStream(outputpath, FileMode.Create, FileAccess.Write))
+				//using (var bw = new BinaryWriter(fs))
+				/*
+				
+			public byte[] riffID; // "riff"
+			public uint size;  // ファイルサイズ-8
+			public byte[] wavID;  // "WAVE"
+			public byte[] fmtID;  // "fmt "
+			public uint fmtSize; // fmtチャンクのバイト数
+			public ushort format; // フォーマット
+			public ushort channels; // チャンネル数
+			public uint sampleRate; // サンプリングレート
+			public uint bytePerSec; // データ速度
+			public ushort blockSize; // ブロックサイズ
+			public ushort bit;  // 量子化ビット数
+			public byte[] dataID; // "data"
+			public uint dataSize; // 波形データのバイト数
+				*/
+				using (var bw = File.OpenWrite(outputpath))
 				{
 					try
 					{
-						bw.Write(Header.riffID);
-						bw.Write(Header.size);
-						bw.Write(Header.wavID);
-						bw.Write(Header.fmtID);
-						bw.Write(Header.fmtSize);
-						bw.Write(Header.format);
-						bw.Write(Header.channels);
-						bw.Write(Header.sampleRate);
-						bw.Write(Header.bytePerSec);
-						bw.Write(Header.blockSize);
-						bw.Write(Header.bit);
-						bw.Write(Header.dataID);
-						bw.Write(Header.dataSize);
+						bw.Write(Header.riffID, 0, 4);
+						bw.Write(BitConverter.GetBytes(Header.size), 0, 4);
+						bw.Write(Header.wavID, 0, 4);
+						bw.Write(Header.fmtID, 0, 4);
+						bw.Write(BitConverter.GetBytes(Header.fmtSize), 0, 4);
+						bw.Write(BitConverter.GetBytes(Header.format), 0, 2);
+						bw.Write(BitConverter.GetBytes(Header.channels), 0, 2);
+						bw.Write(BitConverter.GetBytes(Header.sampleRate), 0, 4);
+						bw.Write(BitConverter.GetBytes(Header.bytePerSec), 0, 4);
+						bw.Write(BitConverter.GetBytes(Header.blockSize), 0, 2);
+						bw.Write(BitConverter.GetBytes(Header.bit), 0, 2);
+						bw.Write(Header.dataID, 0, 4);
+						bw.Write(BitConverter.GetBytes(Header.dataSize), 0, 4);
+
+						var zeroByte = new byte[] {0, 0};
 
 						for (var i = 0; i < Header.dataSize / Header.blockSize; i++)
 						{
 							if (i < LeftChannel.Count)
 							{
-								bw.Write((ushort)LeftChannel[i]);
+								bw.Write(BitConverter.GetBytes((ushort)LeftChannel[i]), 0, 2);
 							}
 							else
 							{
-								bw.Write(0);
+								bw.Write(zeroByte, 0, 2);
 							}
 
 							if (i < RightChannel.Count)
 							{
-								bw.Write((ushort)RightChannel[i]);
+								bw.Write(BitConverter.GetBytes((ushort)RightChannel[i]), 0, 2);
 							}
 							else
 							{
-								bw.Write(0);
+								bw.Write(zeroByte, 0, 2);
 							}
 						}
 					}
 					finally
 					{
 						bw.Close();
-						fs.Close();
+						//fs.Close();
 					}
 				}
 			}
@@ -166,24 +185,9 @@ namespace fucktool
 				return CueIndex;
 			}
 
-			/// <summary>
-			/// このオブジェクトを基準として、他のWavFileオブジェクトとのCueIndexの差を求めます。
-			/// </summary>
-			/// <param name="file1"></param>
-			/// <param name="reverse"></param>
-			/// <returns></returns>
-			public int GetDiff(WavFile file1, bool reverse = false)
+			public int GetDiff(WavFile file1)
 			{
-				int diff;
-				if (reverse)
-				{
-					diff = (Count - CueIndex) - (file1.Count - file1.CueIndex);
-				}
-				else
-				{
-					diff = CueIndex - file1.CueIndex;
-				}
-				return diff;
+				return CueIndex - file1.CueIndex;
 			}
 
 			public void Merge(WavFile file1, int diff)
@@ -195,24 +199,28 @@ namespace fucktool
 				{
 					diff = diff * -1;
 
+					var zeroList = new List<short>(new short[diff]);
+
 					Parallel.Invoke(() =>
 					{
-						newWavFile.LeftChannel = file1.LeftChannel.Skip(diff).Select(x =>
+						newWavFile.LeftChannel = file1.LeftChannel.Select(x =>
 						{
 							if (x != -32768)
 								return (short)(x * -1);
 							else
 								return short.MaxValue;
 						}).ToList<short>();
+						newWavFile.LeftChannel.InsertRange(0, zeroList);
 					}, () =>
 					{
-						newWavFile.RightChannel = file1.RightChannel.Skip(diff).Select(x =>
+						newWavFile.RightChannel = newWavFile.RightChannel.Select(x =>
 						{
 							if (x != -32768)
 								return (short)(x * -1);
 							else
 								return short.MaxValue;
 						}).ToList<short>();
+						newWavFile.RightChannel.InsertRange(0, zeroList);
 					});
 
 					mergeWavFile = this;
@@ -281,8 +289,7 @@ namespace fucktool
 					progress.Report("先頭発見");
 				});
 
-				// FIXME: reverse時バグる気がする
-				var diff = file0.GetDiff(file1, reverse);
+				var diff = file0.GetDiff(file1);
 				file0.Merge(file1, diff);
 				progress.Report("保存中");
 				file0.SaveWavfile(outputpath);
